@@ -9,6 +9,7 @@ import html
 import json
 import urllib.request
 import urllib.error
+import sqlite3
 from pathlib import Path
 
 import pyautogui
@@ -45,108 +46,102 @@ BASE_DIR = Path(__file__).resolve().parent
 SCREENSHOT_DIR = BASE_DIR / "screenshots"
 SCREENSHOT_DIR.mkdir(exist_ok=True)
 
-
 # --------------------------------------------------
 # GREEN NATURE THEME
 # --------------------------------------------------
 
 GREEN_THEME_QSS = """
-QMainWindow {
-    background-color: #F4F8F1;
-}
+QMainWindow { background-color: #F4F8F1; }
 QWidget {
     font-family: "Segoe UI";
     font-size: 13px;
     color: #23412C;
 }
-QFrame#sidebar {
+QFrame#sidebar, QFrame#chat_panel {
     background-color: #FFFFFF;
     border: 1px solid #DCE8D7;
     border-radius: 16px;
 }
-QFrame#chat_panel {
-    background-color: #FFFFFF;
-    border: 1px solid #DCE8D7;
-    border-radius: 16px;
-}
-QLabel {
-    background: transparent;
-    color: #23412C;
-}
+QLabel { background: transparent; color: #23412C; }
 QLabel#brand {
-    color: #3F7D45;
-    font-size: 24px;
-    font-weight: bold;
+    color: #3F7D45; font-size: 24px; font-weight: bold;
 }
-QLabel#subtitle {
-    color: #789078;
-    font-size: 12px;
-}
+QLabel#subtitle { color: #789078; font-size: 12px; }
 QLabel#section_title {
-    color: #23412C;
-    font-size: 17px;
-    font-weight: bold;
+    color: #23412C; font-size: 17px; font-weight: bold;
 }
-QLabel#status {
-    color: #527358;
-    font-size: 12px;
-}
+QLabel#status { color: #527358; font-size: 12px; }
 QTextBrowser {
-    background-color: #FAFCF8;
-    border: 1px solid #E5EDE1;
-    border-radius: 12px;
-    padding: 12px;
-    selection-background-color: #62A65A;
-    selection-color: white;
+    background-color: #FAFCF8; border: 1px solid #E5EDE1;
+    border-radius: 12px; padding: 12px;
+    selection-background-color: #62A65A; selection-color: white;
 }
 QLineEdit {
-    background-color: #FFFFFF;
-    color: #23412C;
-    border: 1px solid #C8DCC3;
-    border-radius: 12px;
-    padding: 12px;
-    font-size: 14px;
+    background-color: #FFFFFF; color: #23412C;
+    border: 1px solid #C8DCC3; border-radius: 12px;
+    padding: 12px; font-size: 14px;
 }
-QLineEdit:focus {
-    border: 2px solid #62A65A;
-}
+QLineEdit:focus { border: 2px solid #62A65A; }
 QPushButton {
-    background-color: #62A65A;
-    color: white;
-    font-weight: bold;
-    border: none;
-    border-radius: 10px;
-    padding: 10px 15px;
+    background-color: #62A65A; color: white; font-weight: bold;
+    border: none; border-radius: 10px; padding: 10px 15px;
 }
-QPushButton:hover {
-    background-color: #4E9148;
-}
-QPushButton:pressed {
-    background-color: #3D7539;
-}
-QPushButton:disabled {
-    background-color: #B8CBB3;
-    color: #F4F8F1;
-}
+QPushButton:hover { background-color: #4E9148; }
+QPushButton:pressed { background-color: #3D7539; }
+QPushButton:disabled { background-color: #B8CBB3; color: #F4F8F1; }
 QPushButton#secondary {
-    background-color: #EEF5E9;
-    color: #315D35;
-    border: 1px solid #DCE8D7;
-    text-align: left;
-    padding: 11px;
+    background-color: #EEF5E9; color: #315D35;
+    border: 1px solid #DCE8D7; text-align: left; padding: 11px;
 }
-QPushButton#secondary:hover {
-    background-color: #E0EED9;
-}
+QPushButton#secondary:hover { background-color: #E0EED9; }
 QPushButton#clear {
-    background-color: transparent;
-    color: #648066;
+    background-color: transparent; color: #648066;
     border: 1px solid #DCE8D7;
 }
-QPushButton#clear:hover {
-    background-color: #EEF5E9;
-}
+QPushButton#clear:hover { background-color: #EEF5E9; }
 """
+
+# --------------------------------------------------
+# PERSONAL MEMORY DATABASE
+# --------------------------------------------------
+
+def init_memory_db():
+    db_path = BASE_DIR / "mindos_memory.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category TEXT NOT NULL,
+                content TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+
+def save_memory(category, content):
+    db_path = BASE_DIR / "mindos_memory.db"
+    created_at = datetime.datetime.now().isoformat(timespec="seconds")
+    with sqlite3.connect(db_path) as connection:
+        connection.execute(
+            """INSERT INTO memories (category, content, created_at)
+               VALUES (?, ?, ?)""",
+            (category, content, created_at),
+        )
+
+
+def get_memories():
+    db_path = BASE_DIR / "mindos_memory.db"
+    with sqlite3.connect(db_path) as connection:
+        return connection.execute(
+            """SELECT id, category, content, created_at
+               FROM memories ORDER BY id DESC"""
+        ).fetchall()
+
+
+def delete_memory(memory_id):
+    db_path = BASE_DIR / "mindos_memory.db"
+    with sqlite3.connect(db_path) as connection:
+        connection.execute("DELETE FROM memories WHERE id = ?", (memory_id,))
 
 
 # --------------------------------------------------
@@ -156,7 +151,6 @@ QPushButton#clear:hover {
 class AIWorker(QThread):
     """Runs the local model request away from the GUI thread."""
     answer_ready = Signal(str, str)
-    # Emits (reply, error_message); error_message is empty on success.
 
     def __init__(self, prompt, conversation, parent=None):
         super().__init__(parent)
@@ -164,32 +158,28 @@ class AIWorker(QThread):
         self.conversation = list(conversation)
 
     def run(self):
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are MindOS, a helpful desktop AI assistant. "
-                    "Be clear, friendly, and practical. You run locally. "
-                    "Never claim to have performed desktop actions unless "
-                    "the application confirms they succeeded. You cannot "
-                    "directly control the computer; use the app's supported "
-                    "and user-approved quick actions for desktop tasks."
-                ),
-            }
-        ]
+        messages = [{
+            "role": "system",
+            "content": (
+                "You are MindOS, a helpful desktop AI assistant. "
+                "Be clear, friendly, and practical. You run locally. "
+                "Never claim to have performed desktop actions unless "
+                "the application confirms they succeeded. You cannot "
+                "directly control the computer; use the app's supported "
+                "and user-approved quick actions for desktop tasks."
+            ),
+        }]
         messages.extend(self.conversation)
         messages.append({"role": "user", "content": self.prompt})
 
         payload = {
-             "model": OLLAMA_MODEL,
+            "model": OLLAMA_MODEL,
             "messages": messages,
-             "stream": False,
-             "think": False,
-               "keep_alive": "15m",
-                "options": {
-        "num_predict": 256,
-    },
-}
+            "stream": False,
+            "think": False,
+            "keep_alive": "15m",
+            "options": {"num_predict": 256},
+        }
         request = urllib.request.Request(
             OLLAMA_URL,
             data=json.dumps(payload).encode("utf-8"),
@@ -208,20 +198,17 @@ class AIWorker(QThread):
             reason = getattr(error, "reason", error)
             self.answer_ready.emit(
                 "",
-                "I couldn't reach Ollama at "
-                f"{OLLAMA_URL}.\n\n"
-                "Make sure the Ollama app is running and the model is "
-                f"installed (`{OLLAMA_MODEL}`).\n\nDetails: {reason}",
+                f"I couldn't reach Ollama at {OLLAMA_URL}.\n\n"
+                f"Make sure Ollama is running and `{OLLAMA_MODEL}` is installed.\n\n"
+                f"Details: {reason}",
             )
         except TimeoutError:
             self.answer_ready.emit(
-                "",
-                "The local model took too long to respond. Please try again.",
+                "", "The local model took too long to respond. Please try again."
             )
         except Exception as error:
             self.answer_ready.emit(
-                "",
-                f"Something went wrong while talking to Ollama:\n{error}",
+                "", f"Something went wrong while talking to Ollama:\n{error}"
             )
 
 
@@ -232,7 +219,6 @@ class AIWorker(QThread):
 class MindOSDashboard(QMainWindow):
     def __init__(self):
         super().__init__()
-
         self.setWindowTitle("MindOS | AI Desktop Assistant")
         self.resize(1120, 720)
         self.setMinimumSize(760, 540)
@@ -241,6 +227,7 @@ class MindOSDashboard(QMainWindow):
         self.conversation = []
         self.busy = False
         self.worker = None
+        self.pending_prompt = ""
 
         self.setup_ui()
         self.check_ollama()
@@ -300,27 +287,18 @@ class MindOSDashboard(QMainWindow):
         sidebar_layout.addWidget(
             self.make_button("✦   Ask AI anything", self.focus_input, True)
         )
-        sidebar_layout.addWidget(
-            self.make_button(
-                "▣   Open Notepad",
-                lambda: self.request_automation("open notepad"),
-                True,
-            )
-        )
-        sidebar_layout.addWidget(
-            self.make_button(
-                "▣   Open Calculator",
-                lambda: self.request_automation("open calculator"),
-                True,
-            )
-        )
-        sidebar_layout.addWidget(
-            self.make_button(
-                "◉   Take screenshot",
-                lambda: self.request_automation("take screenshot"),
-                True,
-            )
-        )
+        sidebar_layout.addWidget(self.make_button(
+            "▣   Open Notepad",
+            lambda: self.request_automation("open notepad"), True
+        ))
+        sidebar_layout.addWidget(self.make_button(
+            "▣   Open Calculator",
+            lambda: self.request_automation("open calculator"), True
+        ))
+        sidebar_layout.addWidget(self.make_button(
+            "◉   Take screenshot",
+            lambda: self.request_automation("take screenshot"), True
+        ))
         sidebar_layout.addStretch()
 
         self.ai_status = self.make_label("● Checking local AI...", "status")
@@ -339,15 +317,10 @@ class MindOSDashboard(QMainWindow):
         header_layout = QHBoxLayout()
         header_text = QVBoxLayout()
         header_text.setSpacing(4)
-        header_text.addWidget(
-            self.make_label("Your AI workspace", "section_title")
-        )
-        header_text.addWidget(
-            self.make_label(
-                "A calm space to think, create and get things done.",
-                "subtitle",
-            )
-        )
+        header_text.addWidget(self.make_label("Your AI workspace", "section_title"))
+        header_text.addWidget(self.make_label(
+            "A calm space to think, create and get things done.", "subtitle"
+        ))
         header_layout.addLayout(header_text)
         header_layout.addStretch()
 
@@ -387,8 +360,7 @@ class MindOSDashboard(QMainWindow):
         chat_layout.addLayout(input_layout)
 
         footer = self.make_label(
-            "AI responses may be inaccurate. "
-            "Desktop actions require your approval.",
+            "AI responses may be inaccurate. Desktop actions require your approval.",
             "subtitle",
         )
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -420,19 +392,14 @@ class MindOSDashboard(QMainWindow):
 
         message_html = f"""
         <div style="margin: 12px 4px; text-align: {alignment};">
-            <div style="color: #789078; font-size: 11px; margin-bottom: 5px;">
-                {html.escape(name)}
-            </div>
-            <span style="
-                display: inline-block;
-                background-color: {bubble_color};
-                color: {text_color};
-                border: 1px solid #DCE8D7;
-                border-radius: 12px;
-                padding: 11px 14px;
-                line-height: 1.5;">
-                {safe_message}
-            </span>
+          <div style="color: #789078; font-size: 11px; margin-bottom: 5px;">
+            {html.escape(name)}
+          </div>
+          <span style="display: inline-block; background-color: {bubble_color};
+            color: {text_color}; border: 1px solid #DCE8D7;
+            border-radius: 12px; padding: 11px 14px; line-height: 1.5;">
+            {safe_message}
+          </span>
         </div>
         """
         cursor = self.chat_display.textCursor()
@@ -476,7 +443,6 @@ class MindOSDashboard(QMainWindow):
     # --------------------------------------------------
 
     def check_ollama(self):
-        """Quickly check the local Ollama tags endpoint."""
         tags_url = OLLAMA_URL.rsplit("/", 1)[0] + "/tags"
         try:
             with urllib.request.urlopen(tags_url, timeout=3) as response:
@@ -500,8 +466,8 @@ class MindOSDashboard(QMainWindow):
             self.append_message(
                 "MindOS",
                 "I couldn't contact Ollama yet. Make sure the Ollama app is "
-                "running. Your installed model should be "
-                f"`{OLLAMA_MODEL}`. You can still use the desktop quick actions.",
+                f"running. Your installed model should be `{OLLAMA_MODEL}`. "
+                "You can still use the desktop quick actions.",
                 "system",
             )
 
@@ -515,14 +481,12 @@ class MindOSDashboard(QMainWindow):
 
         if "notepad" in words and words.intersection({"open", "launch", "start"}):
             return "notepad"
-        if (
-            words.intersection({"calculator", "calc"})
-            and words.intersection({"open", "launch", "start"})
+        if words.intersection({"calculator", "calc"}) and words.intersection(
+            {"open", "launch", "start"}
         ):
             return "calculator"
-        if (
-            words.intersection({"terminal", "cmd"})
-            and words.intersection({"open", "launch", "start"})
+        if words.intersection({"terminal", "cmd"}) and words.intersection(
+            {"open", "launch", "start"}
         ):
             return "terminal"
         if "youtube" in words and words.intersection({"open", "launch", "visit"}):
@@ -573,9 +537,7 @@ class MindOSDashboard(QMainWindow):
             QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
-            self.append_message(
-                "MindOS", "Action cancelled. Nothing was executed.", "system"
-            )
+            self.append_message("MindOS", "Action cancelled. Nothing was executed.", "system")
             return
 
         try:
@@ -641,27 +603,70 @@ class MindOSDashboard(QMainWindow):
 
         self.input_field.clear()
         self.append_message("You", text, "user")
-
         normalized = text.lower().strip().rstrip("?!.")
 
-        if normalized in {
-            "time",
-            "what time is it",
-            "tell me the time",
-            "current time",
-            "what is the time",
-        }:
-            now = datetime.datetime.now().strftime("%I:%M %p")
-            self.append_message(
-                "MindOS", f"The current time is {now}.", "assistant"
-            )
+        # Save a memory only when the user explicitly asks.
+        if normalized.startswith("remember that "):
+            content = text[len("remember that "):].strip()
+            if content:
+                try:
+                    save_memory("personal", content)
+                    self.append_message(
+                        "MindOS", f"I'll remember that: {content}", "assistant"
+                    )
+                except sqlite3.Error as error:
+                    self.append_message(
+                        "MindOS", f"I couldn't save that memory: {error}", "system"
+                    )
+            else:
+                self.append_message(
+                    "MindOS", "Please tell me what you'd like me to remember.",
+                    "assistant"
+                )
             return
 
+        # List saved memories.
+        if normalized in {"what do you remember", "show memories", "list memories"}:
+            memories = get_memories()
+            if not memories:
+                self.append_message("MindOS", "I don't have any saved memories yet.", "assistant")
+            else:
+                lines = [
+                    f"{memory_id}. [{category}] {content} ({created_at})"
+                    for memory_id, category, content, created_at in memories
+                ]
+                self.append_message("MindOS", "Here's what I remember:\n" + "\n".join(lines), "assistant")
+            return
+
+        # Delete a memory by its numeric ID, e.g. "forget memory 2".
+        if normalized.startswith("forget memory "):
+            memory_id_text = normalized[len("forget memory "):].strip()
+            try:
+                memory_id = int(memory_id_text)
+                delete_memory(memory_id)
+                self.append_message("MindOS", f"Deleted memory {memory_id}, if it existed.", "assistant")
+            except ValueError:
+                self.append_message("MindOS", "Use a number, for example: forget memory 2.", "assistant")
+            except sqlite3.Error as error:
+                self.append_message("MindOS", f"I couldn't delete that memory: {error}", "system")
+            return
+
+        # Time command.
+        if normalized in {
+            "time", "what time is it", "tell me the time",
+            "current time", "what is the time",
+        }:
+            now = datetime.datetime.now().strftime("%I:%M %p")
+            self.append_message("MindOS", f"The current time is {now}.", "assistant")
+            return
+
+        # Desktop automation.
         action = self.identify_automation(text)
         if action is not None:
             self.request_automation(text)
             return
 
+        # Local AI response.
         self.busy = True
         self.send_btn.setEnabled(False)
         self.send_btn.setText("Thinking...")
@@ -675,20 +680,12 @@ class MindOSDashboard(QMainWindow):
         self.worker.start()
 
     def on_ai_answer(self, answer, error_message):
-        QApplication.restoreOverrideCursor()
         if error_message:
             self.append_message("MindOS", error_message, "system")
             return
 
         self.append_message("MindOS", answer, "assistant")
-        # Store only successful exchanges as context for the next turn.
-        # Keep the recent conversation short to limit memory and prompt size.
-        # The worker used the old history plus this current prompt.
-        # The latest user text is available from the last user bubble only,
-        # so capture it in self.pending_prompt before starting the worker.
-        self.conversation.append(
-            {"role": "user", "content": getattr(self, "pending_prompt", "")}
-        )
+        self.conversation.append({"role": "user", "content": self.pending_prompt})
         self.conversation.append({"role": "assistant", "content": answer})
         self.conversation = self.conversation[-20:]
 
@@ -721,6 +718,7 @@ class MindOSDashboard(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    init_memory_db()
     app.setFont(QFont("Segoe UI", 10))
 
     window = MindOSDashboard()
