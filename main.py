@@ -1,3 +1,4 @@
+import time
 import sys
 import os
 import subprocess
@@ -160,16 +161,74 @@ class AIWorker(QThread):
     def run(self):
         messages = [{
             "role": "system",
+           
             "content": (
-                "You are MindOS, a helpful desktop AI assistant. "
-                "Be clear, friendly, and practical. You run locally. "
-                "Never claim to have performed desktop actions unless "
-                "the application confirms they succeeded. You cannot "
-                "directly control the computer; use the app's supported "
-                "and user-approved quick actions for desktop tasks."
+                "You are MindOS, a helpful, intelligent personal desktop AI assistant. "
+                "Your goal is to understand the user's intent and provide useful, "
+                "accurate, relevant answers. "
+
+                "RESPONSE STYLE: "
+                "Be clear, natural, friendly, and practical. "
+                "Use simple language when explaining difficult topics. "
+                "When useful, provide a real-world example and actionable steps. "
+                "Match the length of your answer to the user's question. "
+                "Avoid unnecessary repetition and generic introductions. "
+
+
+                "REASONING AND ACCURACY: "
+                "Understand the whole question before answering. "
+                "If a request is ambiguous, ask a concise clarifying question. "
+                "Never invent facts or pretend to know something you do not know. "
+                "Clearly state uncertainty when necessary. "
+
+                "CONVERSATION: "
+                "Use previous messages in the conversation when relevant. "
+                "Answer follow-up questions in context. "
+                "Do not ask the user to repeat information already provided. "
+
+                "DESKTOP SAFETY: "
+                "You run locally through Ollama. "
+                "Never claim that you performed a desktop action unless the "
+                "application confirms that it succeeded. "
+                "You cannot directly control the computer through text alone. "
+                "Desktop actions must use the application's supported "
+                "and user-approved action handlers. "
+
+                "Keep responses helpful and focused on the user's actual request."
             ),
+
         }]
-        messages.extend(self.conversation)
+        
+        # Retrieve saved personal memories.
+        try:
+            memories = get_memories()
+            if memories:
+                memory_text = "\n".join(
+                    f"- [{category}] {content}"
+                    for _, category, content, _ in memories
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Saved personal memories about the user are below. "
+                         "Use these memories as factual context when relevant. "
+"Answer questions about what you remember using only information "
+"explicitly present in these memories or the conversation. "
+"Never invent personal experiences, feelings, challenges, "
+"collaborations, or plans. If the memories do not contain the "
+"answer, say you do not have that information saved. "
+                        "Do not force irrelevant memories into answers, and "
+                        "do not treat a memory as proof if the user corrects it.\n"
+                        + memory_text
+                    ),
+                })
+        except Exception as error:
+            print(f"Could not load personal memories: {error}")
+
+
+
+
+        messages.extend(self.conversation[-6:])
         messages.append({"role": "user", "content": self.prompt})
 
         payload = {
@@ -187,10 +246,15 @@ class AIWorker(QThread):
             method="POST",
         )
 
+        start_time = time.time()
+
         try:
             with urllib.request.urlopen(request, timeout=180) as response:
                 result = json.loads(response.read().decode("utf-8"))
+            print(f"MindOS Ollama request took {time.time() - start_time:.2f} seconds")
+            print(f"Prompt characters sent: {len(json.dumps(payload))}")  
             reply = result.get("message", {}).get("content", "").strip()
+
             if not reply:
                 reply = "I received an empty response. Please try again."
             self.answer_ready.emit(reply, "")
@@ -499,6 +563,43 @@ class MindOSDashboard(QMainWindow):
             return "screenshot"
         return None
 
+
+
+
+     
+    def detect_intent(self, command):
+        """Classify a user message into a basic intent."""
+        text = command.lower().strip()
+
+        # Check supported desktop actions first.
+        action = self.identify_automation(text)
+        if action is not None:
+            return {
+                "type": "desktop_action",
+                "action": action,
+                "message": command,
+            }
+
+        # Detect questions and normal conversation.
+        question_words = {
+            "what", "why", "how", "when", "where",
+            "who", "which", "explain", "describe",
+        }
+        first_word = text.split()[0] if text.split() else ""
+
+        if "?" in text or first_word in question_words:
+            return {
+                "type": "question",
+                "action": None,
+                "message": command,
+            }
+
+        return {
+            "type": "conversation",
+            "action": None,
+            "message": command,
+        }
+
     # --------------------------------------------------
     # APPROVED DESKTOP AUTOMATION
     # --------------------------------------------------
@@ -660,10 +761,16 @@ class MindOSDashboard(QMainWindow):
             self.append_message("MindOS", f"The current time is {now}.", "assistant")
             return
 
-        # Desktop automation.
-        action = self.identify_automation(text)
-        if action is not None:
+       
+        # Brain engine: detect the user's intent.
+        intent = self.detect_intent(text)
+
+        if intent["type"] == "desktop_action":
             self.request_automation(text)
+            return
+
+        # Questions and normal conversation continue to the local AI.
+            uest_automation(text)
             return
 
         # Local AI response.
